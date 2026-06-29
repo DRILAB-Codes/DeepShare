@@ -1,0 +1,37 @@
+data:
+  train_dir: data/ae/train_mixed
+  val_dir: data/ae/val_mixed
+  input_num_points: 128
+  target_num_points: 128
+  normalize: true
+  use_saved_boundary: true
+
+model:
+  encoder_mode: point_embed
+  decoder_mode: folding
+
+  latent_dim: 128
+  input_channels: 1
+  output_dim: 3
+
+  hidden_dim: 128
+  k_cov: 32
+  k_agg: 16
+  use_attention: true
+
+  decoder_hidden_dim: 512
+  folding_grid_dim: 1
+  folding_num_folds: 2
+
+training:
+  out_dir: runs/ae_point_mixed_folding
+  batch_size: 64
+  num_workers: 4
+  epochs: 500
+  lr: 0.001
+  weight_decay: 0.0
+  patience: 300
+  min_delta: 0.00001
+  save_every: 10
+  seed: 0
+  local_variance_weight: 0.05

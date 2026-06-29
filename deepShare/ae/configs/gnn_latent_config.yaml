@@ -1,0 +1,37 @@
+data:
+  train_dir: data/gnn_latent/train_mixed
+  val_dir: data/gnn_latent/val_mixed
+  input_num_points: 64
+  target_num_points: 256
+  include_miss: false
+  normalize: true
+  use_world_frame: true
+
+ae:
+  checkpoint: out/ae_ssg/model_best.pt
+  freeze_decoder: true
+
+model:
+  method: consensus
+  input_point_dim: 3
+  latent_dim: 128
+  node_hidden_dim: 128
+  aggregator: dual_attention
+  include_self: true
+  max_steps: 15
+  stable_tol: 0.03
+  stable_patience: 3
+  stop_when_converged: true
+
+training:
+  out_dir: out/gnn_latent_mixed
+  batch_size: 1
+  epochs: 200
+  lr: 0.0001
+  weight_decay: 0.00001
+  num_workers: 0
+  seed: 42
+  save_every: 50
+  patience: 30
+  min_delta: 0.0005
+  latent_loss_type: mse

@@ -1,0 +1,57 @@
+# python
+__pycache__/
+*.pyc
+
+# logs
+logs/
+
+# dataset
+deepShare/dataset/data
+deepShare/ae/data
+
+# vscode
+.vscode/
+*.zip
+.git/
+data/
+datasets/
+out/
+outputs/
+runs/
+Java/
+wandb/
+checkpoints/
+__pycache__/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npz
+*.npy
+*.pkl
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.avi
+.git/
+data/
+dataset/
+out/
+outputs/
+runs/
+wandb/
+checkpoints/
+__pycache__/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.npz
+*.npy
+*.pkl
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.avi

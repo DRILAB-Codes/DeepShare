@@ -1,0 +1,26 @@
+data:
+  train_dir: data/ae/train
+  val_dir: data/ae/val
+  test_dir: data/ae/test
+  input_num_points: 64
+  target_num_points: 128
+  include_miss: false
+  normalize: true
+
+model:
+  encoder_mode: msg   # ssg or msg
+  latent_dim: 128
+  base_radius: 1.0
+  npoint1: 32
+  npoint2: 16
+
+training:
+  out_dir: out/ae_msg
+  batch_size: 128
+  epochs: 700
+  lr: 0.001
+  patience: 50
+  min_delta: 0.00001
+  num_workers: 4
+  save_every: 10
+  seed: 0
