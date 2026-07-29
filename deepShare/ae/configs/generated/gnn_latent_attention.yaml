@@ -2,7 +2,7 @@ data:
   train_dir: data/gnn_latent/train_mixed
   val_dir: data/gnn_latent/val_mixed
   input_num_points: 64
-  target_num_points: 256
+  target_num_points: 128
   include_miss: false
   normalize: true
   use_world_frame: true

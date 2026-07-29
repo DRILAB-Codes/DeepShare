@@ -100,6 +100,46 @@ def nodewise_chamfer_loss(pred_nodes, target):
     target_nodes = target.unsqueeze(0).expand(num_nodes, -1, -1)
     return chamfer_distance(pred_nodes, target_nodes)
 
+@torch.no_grad()
+def nodewise_chamfer_stats(pred_nodes, target):
+    """
+    pred_nodes : [N, Qp, 3]
+    target     : [Qt, 3]
+    return node-wise chamfer statistics
+    """
+    vals = []
+    for i in range(pred_nodes.size(0)):
+        cd = chamfer_distance(
+            pred_nodes[i:i+1],
+            target.unsqueeze(0),
+        )
+        vals.append(float(cd.item()))
+
+    arr = np.asarray(vals, dtype=np.float32)
+
+    return {
+        "node_chamfer": vals,
+        "node_chamfer_mean": float(arr.mean()),
+        "node_chamfer_max": float(arr.max()),
+        "node_chamfer_min": float(arr.min()),
+        "node_chamfer_std": float(arr.std()),
+    }
+
+
+@torch.no_grad()
+def consensus_stats(final_h):
+    """
+    final_h : [N, D]
+    """
+    mean_h = final_h.mean(dim=0, keepdim=True)
+    dist = torch.norm(final_h - mean_h, dim=1)
+
+    return {
+        "consensus_l2": dist.detach().cpu().tolist(),
+        "consensus_gap": float(dist.max().item()),
+        "consensus_mean": float(dist.mean().item()),
+        "consensus_std": float(dist.std(unbiased=False).item()),
+    }
 
 def train_one_epoch(model, loader, optimizer, device):
     model.train()
@@ -127,9 +167,7 @@ def train_one_epoch(model, loader, optimizer, device):
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
 
-        # 폭발 방지
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
         optimizer.step()
 
         losses.append(float(loss.item()))
@@ -161,6 +199,18 @@ def evaluate(model, loader, device):
     used_steps = []
     converged = []
 
+    node_chamfer_means = []
+    node_chamfer_maxs = []
+    node_chamfer_mins = []
+    node_chamfer_stds = []
+
+    consensus_gaps = []
+    consensus_means = []
+    consensus_stds = []
+
+    pred_num_points = []
+    target_num_points = []
+
     for b in loader:
         x, edge_index, target = squeeze_batch(b, device)
 
@@ -171,10 +221,37 @@ def evaluate(model, loader, device):
         used_steps.append(float(info["used_steps"]))
         converged.append(float(info["converged"]))
 
+        cd_stats = nodewise_chamfer_stats(pred_nodes, target)
+        cs_stats = consensus_stats(final_h)
+
+        node_chamfer_means.append(cd_stats["node_chamfer_mean"])
+        node_chamfer_maxs.append(cd_stats["node_chamfer_max"])
+        node_chamfer_mins.append(cd_stats["node_chamfer_min"])
+        node_chamfer_stds.append(cd_stats["node_chamfer_std"])
+
+        consensus_gaps.append(cs_stats["consensus_gap"])
+        consensus_means.append(cs_stats["consensus_mean"])
+        consensus_stds.append(cs_stats["consensus_std"])
+
+        pred_num_points.append(float(pred_nodes.size(1)))
+        target_num_points.append(float(target.size(0)))
+
     return {
         "loss": float(np.mean(losses)) if losses else float("nan"),
         "steps": float(np.mean(used_steps)) if used_steps else float("nan"),
         "conv": float(np.mean(converged)) if converged else float("nan"),
+
+        "node_chamfer_mean": float(np.mean(node_chamfer_means)) if node_chamfer_means else float("nan"),
+        "node_chamfer_max": float(np.mean(node_chamfer_maxs)) if node_chamfer_maxs else float("nan"),
+        "node_chamfer_min": float(np.mean(node_chamfer_mins)) if node_chamfer_mins else float("nan"),
+        "node_chamfer_std": float(np.mean(node_chamfer_stds)) if node_chamfer_stds else float("nan"),
+
+        "consensus_gap": float(np.mean(consensus_gaps)) if consensus_gaps else float("nan"),
+        "consensus_mean": float(np.mean(consensus_means)) if consensus_means else float("nan"),
+        "consensus_std": float(np.mean(consensus_stds)) if consensus_stds else float("nan"),
+
+        "pred_num_points": float(np.mean(pred_num_points)) if pred_num_points else float("nan"),
+        "target_num_points": float(np.mean(target_num_points)) if target_num_points else float("nan"),
     }
 
 
@@ -265,6 +342,7 @@ def main(config_path):
 
         row = {
             "epoch": epoch,
+
             "train_loss": train_metrics["loss"],
             "train_steps": train_metrics["steps"],
             "train_conv": train_metrics["conv"],
@@ -272,19 +350,34 @@ def main(config_path):
             "train_h_max": train_metrics["h_max"],
             "train_pred_max": train_metrics["pred_max"],
             "train_target_max": train_metrics["target_max"],
+
             "val_loss": val_metrics["loss"],
             "val_steps": val_metrics["steps"],
             "val_conv": val_metrics["conv"],
+
+            "val_node_chamfer_mean": val_metrics["node_chamfer_mean"],
+            "val_node_chamfer_max": val_metrics["node_chamfer_max"],
+            "val_node_chamfer_min": val_metrics["node_chamfer_min"],
+            "val_node_chamfer_std": val_metrics["node_chamfer_std"],
+
+            "val_consensus_gap": val_metrics["consensus_gap"],
+            "val_consensus_mean": val_metrics["consensus_mean"],
+            "val_consensus_std": val_metrics["consensus_std"],
+
+            "val_pred_num_points": val_metrics["pred_num_points"],
+            "val_target_num_points": val_metrics["target_num_points"],
         }
         hist.append(row)
 
         print(
             f"[{epoch:04d}] "
             f"train_loss={train_metrics['loss']:.6f} "
-            f"h_max={train_metrics['h_max']:.2f} "
-            f"pred_max={train_metrics['pred_max']:.2f} "
-            f"target_max={train_metrics['target_max']:.2f} | "
+            f"h_max={train_metrics['h_max']:.2f} | "
             f"val_loss={val_metrics['loss']:.6f} "
+            f"node_cd_mean={val_metrics['node_chamfer_mean']:.6f} "
+            f"node_cd_max={val_metrics['node_chamfer_max']:.6f} "
+            f"gap={val_metrics['consensus_gap']:.4f} "
+            f"pts={val_metrics['pred_num_points']:.0f}/{val_metrics['target_num_points']:.0f} "
             f"val_steps={val_metrics['steps']:.2f} "
             f"val_conv={val_metrics['conv']:.2%}"
         )

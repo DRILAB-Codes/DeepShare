@@ -11,7 +11,8 @@ import yaml
 
 from datasets.lidar_pointcloud_dataset import LidarObstacleAEDataset
 from models.autoencoder import PointNet2AutoEncoder
-from models.robot_gnn import build_robot_gnn_model
+from models.gnn_global import build_robot_gnn_model
+
 
 
 def set_seed(seed):
@@ -90,28 +91,41 @@ def squeeze_batch(b, device):
     Dataset item:
       x             : [N, P, 3]
       edge_index    : [2, E]
+      robot_pos     : [N, 2]
       target        : [Q, 3]
       target_latent : [D]
 
-    DataLoader(batch_size=1):
+    DataLoader:
       x             : [1, N, P, 3]
       edge_index    : [1, 2, E]
+      robot_pos     : [1, N, 2]
       target        : [1, Q, 3]
       target_latent : [1, D]
     """
     x = b["x"].squeeze(0).to(device)
     edge_index = b["edge_index"].squeeze(0).to(device)
+    robot_pos = b["robot_xy"].squeeze(0).to(device)
     target = b["target"].squeeze(0).to(device)
 
     if "target_latent" not in b:
         raise KeyError(
-            "Dataset must return b['target_latent']. "
-            "Modify LidarObstacleAEDataset to read obstacle['ae_latent']."
+            "Dataset must return b['target_latent']."
         )
 
     target_latent = b["target_latent"].squeeze(0).to(device)
 
-    return x, edge_index, target, target_latent
+    if robot_pos.dim() != 2 or robot_pos.size(-1) != 2:
+        raise ValueError(
+            f"robot_pos must have shape [N, 2], got {robot_pos.shape}"
+        )
+
+    if robot_pos.size(0) != x.size(0):
+        raise ValueError(
+            f"robot count mismatch: x={x.size(0)}, "
+            f"robot_pos={robot_pos.size(0)}"
+        )
+
+    return x, edge_index, robot_pos, target, target_latent
 
 
 def nodewise_latent_loss(final_h, target_latent, loss_type="mse"):
@@ -171,9 +185,16 @@ def train_one_epoch(model, loader, optimizer, device, cfg):
     grad_clip = float(cfg["training"].get("grad_clip", 1.0))
 
     for b in loader:
-        x, edge_index, target, target_latent = squeeze_batch(b, device)
+        x, edge_index, robot_pos, target, target_latent = squeeze_batch(
+            b,
+            device,
+        )
 
-        pred_nodes, final_h, info = model(x, edge_index)
+        pred_nodes, final_h, info = model(
+            x,
+            edge_index,
+            robot_xy=robot_pos,
+        )
         loss = nodewise_latent_loss(final_h, target_latent, loss_type=loss_type)
 
         optimizer.zero_grad(set_to_none=True)
@@ -221,9 +242,16 @@ def evaluate(model, loader, device, cfg):
     loss_type = cfg["training"].get("latent_loss_type", "mse")
 
     for b in loader:
-        x, edge_index, target, target_latent = squeeze_batch(b, device)
+        x, edge_index, robot_pos, target, target_latent = squeeze_batch(
+            b,
+            device,
+        )
 
-        pred_nodes, final_h, info = model(x, edge_index)
+        pred_nodes, final_h, info = model(
+            x,
+            edge_index,
+            robot_xy=robot_pos,
+        )
         loss = nodewise_latent_loss(final_h, target_latent, loss_type=loss_type)
 
         target_nodes = target_latent.unsqueeze(0).expand(final_h.size(0), -1)

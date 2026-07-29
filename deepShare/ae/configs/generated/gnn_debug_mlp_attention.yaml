@@ -1,6 +1,6 @@
 data:
-  train_dir: data/gnn_latent/train_mixed
-  val_dir: data/gnn_latent/val_mixed
+  train_dir: data/ae/train_mixed
+  val_dir: data/ae/val_mixed
   input_num_points: 64
   target_num_points: 128
   include_miss: false
@@ -15,13 +15,18 @@ model:
   latent_dim: 128
   node_hidden_dim: 128
   aggregator: attention
+  node_encoder_type: mlp
+  node_encoder_mode: ssg
+  base_radius: 1.0
+  npoint1: 32
+  npoint2: 16
   include_self: true
   max_steps: 15
   stable_tol: 0.03
   stable_patience: 3
   stop_when_converged: true
 training:
-  out_dir: out/gnn_attention_compare/attention
+  out_dir: out/gnn_encoder_debug_compare/mlp_attention
   batch_size: 1
   epochs: 200
   lr: 0.0001
@@ -31,4 +36,3 @@ training:
   save_every: 30
   patience: 30
   min_delta: 0.0005
-  latent_loss_type: mse

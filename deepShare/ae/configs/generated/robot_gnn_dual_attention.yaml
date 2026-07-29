@@ -1,8 +1,8 @@
 data:
-  train_dir: data/ae/train_mixed
-  val_dir: data/ae/val_mixed
+  train_dir: data/gnn_latent/train_mixed
+  val_dir: data/gnn_latent/val_mixed
   input_num_points: 64
-  target_num_points: 256
+  target_num_points: 128
   include_miss: false
   normalize: true
   use_world_frame: true
@@ -31,3 +31,4 @@ training:
   save_every: 30
   patience: 30
   min_delta: 0.0005
+  latent_loss_type: mse

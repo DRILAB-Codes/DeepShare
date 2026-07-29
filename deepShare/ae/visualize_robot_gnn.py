@@ -7,31 +7,48 @@ import torch
 
 from datasets.lidar_pointcloud_dataset import LidarObstacleAEDataset
 from models.autoencoder import PointNet2AutoEncoder
-from models.robot_gnn import build_robot_gnn_model
+#from models.robot_gnn import build_robot_gnn_model
+from models.gnn_global import build_robot_gnn_model
 
 
 def load_ae_decoder(cfg, device):
+    """
+    GNN checkpoint의 cfg가 가리키는 AE checkpoint에서 decoder를 복원한다.
+
+    train_gnn_latent.py의 AE 생성 인자와 동일하게 맞춰,
+    AE 구조 변경에 따른 state_dict 불일치를 방지한다.
+    """
     ae_ckpt_path = cfg["ae"]["checkpoint"]
     ckpt = torch.load(ae_ckpt_path, map_location=device)
     ae_cfg = ckpt["cfg"]
 
     ae = PointNet2AutoEncoder(
-        encoder_mode=ae_cfg["model"]["encoder_mode"],
+        encoder_mode=ae_cfg["model"].get("encoder_mode", "ssg"),
+        decoder_mode=ae_cfg["model"].get("decoder_mode", "mlp"),
         latent_dim=ae_cfg["model"]["latent_dim"],
+        input_channels=ae_cfg["model"].get("input_channels", 0),
         target_num_points=ae_cfg["data"]["target_num_points"],
+        output_dim=ae_cfg["model"].get("output_dim", 3),
         base_radius=ae_cfg["model"].get("base_radius", 1.0),
         npoint1=ae_cfg["model"].get("npoint1", 32),
         npoint2=ae_cfg["model"].get("npoint2", 16),
+        hidden_dim=ae_cfg["model"].get("hidden_dim", 128),
+        k_cov=ae_cfg["model"].get("k_cov", 32),
+        k_agg=ae_cfg["model"].get("k_agg", 16),
+        use_attention=ae_cfg["model"].get("use_attention", True),
+        decoder_hidden_dim=ae_cfg["model"].get("decoder_hidden_dim", 512),
+        folding_grid_dim=ae_cfg["model"].get("folding_grid_dim", 1),
+        folding_num_folds=ae_cfg["model"].get("folding_num_folds", 2),
     ).to(device)
 
     ae.load_state_dict(ckpt["model"])
     ae.eval()
 
+    for p in ae.parameters():
+        p.requires_grad = False
+
     decoder = ae.decoder
     decoder.eval()
-
-    for p in decoder.parameters():
-        p.requires_grad = False
 
     return decoder
 
@@ -51,14 +68,50 @@ def build_dataset(cfg, data_dir, seed=0):
 
 
 def load_robot_gnn(checkpoint_path, device):
+    """
+    checkpoint 내부 cfg를 그대로 사용해 GNN 구조를 재생성한다.
+    """
     ckpt = torch.load(checkpoint_path, map_location=device)
+
+    if "cfg" not in ckpt:
+        raise KeyError(f"{checkpoint_path}: checkpoint에 'cfg'가 없습니다.")
+    if "model" not in ckpt:
+        raise KeyError(f"{checkpoint_path}: checkpoint에 'model'이 없습니다.")
+
     cfg = ckpt["cfg"]
+    use_robot_xy = bool(cfg["model"].get("use_robot_xy", False))
 
     decoder = load_ae_decoder(cfg, device)
     model = build_robot_gnn_model(cfg, decoder=decoder).to(device)
 
-    model.load_state_dict(ckpt["model"])
+    state_dict = ckpt["model"]
+    checkpoint_has_pose = any(
+        key.startswith("pose_encoder.") or key.startswith("node_fusion.")
+        for key in state_dict
+    )
+    built_has_pose = (
+        getattr(model, "pose_encoder", None) is not None
+        and getattr(model, "node_fusion", None) is not None
+    )
+
+    if checkpoint_has_pose != built_has_pose:
+        raise RuntimeError(
+            "Checkpoint와 현재 생성된 GNN 구조의 위치 계층 구성이 다릅니다.\n"
+            f"  cfg use_robot_xy : {use_robot_xy}\n"
+            f"  checkpoint pose  : {checkpoint_has_pose}\n"
+            f"  built model pose : {built_has_pose}\n"
+            "models/robot_gnn.py의 build_robot_gnn_model()이 "
+            "use_robot_xy, robot_xy_dim, pose_hidden_dim을 "
+            "ConsensusRobotGNN에 전달하는지 확인하세요."
+        )
+
+    model.load_state_dict(state_dict, strict=True)
     model.eval()
+
+    print(f"Loaded checkpoint : {checkpoint_path}")
+    print(f"use_robot_xy      : {use_robot_xy}")
+    print(f"aggregator        : {cfg['model'].get('aggregator', 'unknown')}")
+    print(f"checkpoint epoch  : {ckpt.get('epoch', 'unknown')}")
 
     return model, cfg
 
@@ -69,26 +122,58 @@ def get_shape_type(sample):
 
 
 def get_robot_positions(sample):
-    """
-    dataset에 저장된 실제 로봇 위치만 사용.
-    없으면 None 반환.
-    """
-    robot_pos = None
+    """그림에 표시할 로봇 위치를 NumPy 배열로 반환한다."""
+    robot_xy = sample.get("robot_xy")
 
-    if "robot_xy" in sample:
-        robot_pos = sample["robot_xy"]
-    elif "robot_pos" in sample:
-        robot_pos = sample["robot_pos"]
-    elif "robots" in sample:
-        robot_pos = sample["robots"]
+    if robot_xy is None:
+        robot_xy = sample.get("robot_pos")
 
-    if robot_pos is None:
+    if robot_xy is None:
         return None
 
-    if torch.is_tensor(robot_pos):
-        return robot_pos.detach().cpu().numpy()
+    if torch.is_tensor(robot_xy):
+        robot_xy = robot_xy.detach().cpu().numpy()
+    else:
+        robot_xy = torch.as_tensor(
+            robot_xy,
+            dtype=torch.float32,
+        ).detach().cpu().numpy()
 
-    return torch.as_tensor(robot_pos, dtype=torch.float32).detach().cpu().numpy()
+    if robot_xy.ndim != 2 or robot_xy.shape[1] < 2:
+        raise ValueError(
+            f"Robot positions must be [N, 2+] but got {robot_xy.shape}"
+        )
+
+    return robot_xy[:, :2]
+
+
+def get_robot_xy_tensor(sample, device, required):
+    """모델에 전달할 robot_xy tensor를 준비한다."""
+    robot_xy = sample.get("robot_xy")
+
+    if robot_xy is None:
+        robot_xy = sample.get("robot_pos")
+
+    if robot_xy is None:
+        if required:
+            raise KeyError(
+                "이 checkpoint는 use_robot_xy=True이지만 "
+                "Dataset sample에 'robot_xy'가 없습니다."
+            )
+        return None
+
+    robot_xy = torch.as_tensor(
+        robot_xy,
+        dtype=torch.float32,
+        device=device,
+    )
+
+    if robot_xy.dim() != 2 or robot_xy.size(-1) != 2:
+        raise ValueError(
+            f"robot_xy must be [N, 2], got {tuple(robot_xy.shape)}"
+        )
+
+    return robot_xy
 
 
 def collect_indices_by_shape(ds, per_shape=4, start_index=0):
@@ -116,9 +201,9 @@ def plot_one_sample(
     sample_idx,
     max_robots=None,
 ):
-    x = sample["x"].cpu().numpy()                  # [N, P, 3]
-    target = sample["target"].cpu().numpy()        # [Q, 3]
-    pred_nodes = pred_nodes.detach().cpu().numpy() # [N, Q, 3]
+    x = sample["x"].cpu().numpy()
+    target = sample["target"].cpu().numpy()
+    pred_nodes = pred_nodes.detach().cpu().numpy()
 
     num_robots = x.shape[0]
 
@@ -128,12 +213,14 @@ def plot_one_sample(
         robot_indices = list(range(min(max_robots, num_robots)))
 
     n_show = len(robot_indices)
+    if n_show == 0:
+        raise ValueError(f"Sample {sample_idx} contains no robot nodes.")
 
     meta = sample.get("meta", {})
     shape_type = meta.get("shape_type", "unknown")
     obstacle_scale = meta.get("obstacle_scale", "unknown")
 
-    robot_pos = get_robot_positions(sample)
+    robot_xy = get_robot_positions(sample)
 
     fig = plt.figure(figsize=(12, max(6, 2.3 * n_show)))
     gs = fig.add_gridspec(
@@ -144,9 +231,6 @@ def plot_one_sample(
         hspace=0.35,
     )
 
-    # ========================================================
-    # Left: 전체 환경
-    # ========================================================
     env_ax = fig.add_subplot(gs[:, 0])
 
     env_ax.scatter(
@@ -167,10 +251,16 @@ def plot_one_sample(
             alpha=0.55,
         )
 
-    if robot_pos is not None:
+    if robot_xy is not None:
+        if len(robot_xy) != num_robots:
+            print(
+                f"[WARN] Sample {sample_idx}: "
+                f"x robots={num_robots}, robot_xy={len(robot_xy)}"
+            )
+
         env_ax.scatter(
-            robot_pos[:, 0],
-            robot_pos[:, 1],
+            robot_xy[:, 0],
+            robot_xy[:, 1],
             s=55,
             marker="o",
             facecolors="none",
@@ -178,10 +268,10 @@ def plot_one_sample(
             label="robots",
         )
 
-        for robot_idx in range(min(num_robots, len(robot_pos))):
+        for robot_idx in range(min(num_robots, len(robot_xy))):
             env_ax.text(
-                robot_pos[robot_idx, 0],
-                robot_pos[robot_idx, 1],
+                robot_xy[robot_idx, 0],
+                robot_xy[robot_idx, 1],
                 str(robot_idx),
                 fontsize=8,
                 ha="center",
@@ -190,7 +280,7 @@ def plot_one_sample(
     else:
         print(
             f"[WARN] Sample {sample_idx}: robot position not found. "
-            "Check LidarObstacleAEDataset returns 'robot_xy', 'robot_pos', or 'robots'."
+            "Check LidarObstacleAEDataset returns 'robot_xy'."
         )
 
     env_ax.set_title("Environment: obstacle + robots + observed point clouds")
@@ -198,9 +288,6 @@ def plot_one_sample(
     env_ax.grid(True, alpha=0.25)
     env_ax.legend(loc="best")
 
-    # ========================================================
-    # Right: 각 로봇별 reconstruction
-    # ========================================================
     for row, robot_idx in enumerate(robot_indices):
         ax = fig.add_subplot(gs[row, 1])
 
@@ -255,10 +342,7 @@ def main():
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--data_dir", required=True)
     p.add_argument("--start_index", type=int, default=0)
-
-    # 기존 num_samples 대신 shape별 개수
     p.add_argument("--per_shape", type=int, default=4)
-
     p.add_argument("--save_dir", default="out/robot_gnn_vis_by_shape")
     p.add_argument("--max_robots", type=int, default=6)
     p.add_argument("--seed", type=int, default=0)
@@ -268,6 +352,8 @@ def main():
 
     model, cfg = load_robot_gnn(args.checkpoint, device)
     ds = build_dataset(cfg, args.data_dir, seed=args.seed)
+
+    use_robot_xy = bool(cfg["model"].get("use_robot_xy", False))
 
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -287,9 +373,24 @@ def main():
 
         x = sample["x"].to(device)
         edge_index = sample["edge_index"].to(device)
+        robot_xy = get_robot_xy_tensor(
+            sample,
+            device=device,
+            required=use_robot_xy,
+        )
+
+        if robot_xy is not None and robot_xy.size(0) != x.size(0):
+            raise ValueError(
+                f"Sample {i}: robot count mismatch: "
+                f"x={x.size(0)}, robot_xy={robot_xy.size(0)}"
+            )
 
         with torch.no_grad():
-            pred_nodes, final_h, info = model(x, edge_index)
+            pred_nodes, final_h, info = model(
+                x,
+                edge_index,
+                robot_xy=robot_xy,
+            )
 
         shape_type = get_shape_type(sample)
         shape_dir = save_dir / str(shape_type)

@@ -63,6 +63,9 @@ class ConsensusRobotGNN(nn.Module):
         stable_tol=0.03,
         stable_patience=3,
         stop_when_converged=True,
+        use_robot_xy=True,
+        robot_xy_dim=2,
+        pose_hidden_dim=32,
     ):
         super().__init__()
 
@@ -90,6 +93,30 @@ class ConsensusRobotGNN(nn.Module):
         else:
             raise ValueError(f"Unknown node_encoder_type: {node_encoder_type}")
 
+        self.use_robot_xy = bool(use_robot_xy)
+        self.robot_xy_dim = int(robot_xy_dim)
+        self.pose_hidden_dim = int(pose_hidden_dim)
+
+        if self.use_robot_xy:
+            self.pose_encoder = nn.Sequential(
+                nn.Linear(self.robot_xy_dim, self.pose_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(self.pose_hidden_dim, self.pose_hidden_dim),
+                nn.ReLU(),
+            )
+
+            self.node_fusion = nn.Sequential(
+                nn.Linear(
+                    latent_dim + self.pose_hidden_dim,
+                    latent_dim,
+                ),
+                nn.ReLU(),
+                nn.Linear(latent_dim, latent_dim),
+            )
+        else:
+            self.pose_encoder = None
+            self.node_fusion = None
+
         self.initial_gnn = build_gnn_layer(
             aggregator=aggregator,
             in_dim=latent_dim,
@@ -113,10 +140,11 @@ class ConsensusRobotGNN(nn.Module):
         self.stable_patience = int(stable_patience)
         self.stop_when_converged = bool(stop_when_converged)
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, robot_xy=None):
         """
         x          : [N, P, 3]
         edge_index : [2, E]
+        robot_xy   : [N, 2]
 
         returns:
           pred_nodes : [N, Q, 3]
@@ -129,7 +157,39 @@ class ConsensusRobotGNN(nn.Module):
         aux_history = []
 
         # 1. 각 로봇 partial point cloud -> 초기 node embedding
-        h = self.node_encoder(x)  # [N, latent_dim]
+        point_h = self.node_encoder(x)  # [N, latent_dim]
+
+        # 2. robot position embedding + fusion
+        if self.use_robot_xy:
+            if robot_xy is None:
+                raise ValueError(
+                    "robot_xy is required when use_robot_xy=True"
+                )
+
+            if robot_xy.dim() != 2:
+                raise ValueError(
+                    f"robot_xy must be [N, 2], got {robot_xy.shape}"
+                )
+
+            if robot_xy.size(0) != point_h.size(0):
+                raise ValueError(
+                    "robot count mismatch: "
+                    f"point_h={point_h.size(0)}, "
+                    f"robot_xy={robot_xy.size(0)}"
+                )
+
+            if robot_xy.size(-1) != self.robot_xy_dim:
+                raise ValueError(
+                    f"robot_xy last dim must be {self.robot_xy_dim}, "
+                    f"got {robot_xy.size(-1)}"
+                )
+
+            pose_h = self.pose_encoder(robot_xy)
+            h = torch.cat([point_h, pose_h], dim=-1)
+            h = self.node_fusion(h)
+
+        else:
+            h = point_h
 
         # 2. 첫 message passing
         h, aux = self.initial_gnn(h, edge_index)
@@ -204,13 +264,26 @@ def build_robot_gnn_model(cfg, decoder):
             max_steps=model_cfg.get("max_steps", 10),
             stable_tol=model_cfg.get("stable_tol", 0.03),
             stable_patience=model_cfg.get("stable_patience", 3),
-            stop_when_converged=model_cfg.get("stop_when_converged", True),
-
-            node_encoder_type=model_cfg.get("node_encoder_type", "mlp"),
-            node_encoder_mode=model_cfg.get("node_encoder_mode", "ssg"),
+            stop_when_converged=model_cfg.get(
+                "stop_when_converged",
+                True,
+            ),
+            node_encoder_type=model_cfg.get(
+                "node_encoder_type",
+                "mlp",
+            ),
+            node_encoder_mode=model_cfg.get(
+                "node_encoder_mode",
+                "ssg",
+            ),
             base_radius=model_cfg.get("base_radius", 1.0),
             npoint1=model_cfg.get("npoint1", 32),
             npoint2=model_cfg.get("npoint2", 16),
+
+            # 추가
+            use_robot_xy=model_cfg.get("use_robot_xy", True),
+            robot_xy_dim=model_cfg.get("robot_xy_dim", 2),
+            pose_hidden_dim=model_cfg.get("pose_hidden_dim", 32),
         )
 
     raise ValueError(f"Unknown robot GNN method: {method}")
