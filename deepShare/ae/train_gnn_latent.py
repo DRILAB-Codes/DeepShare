@@ -14,7 +14,6 @@ from models.autoencoder import PointNet2AutoEncoder
 from models.gnn_global import build_robot_gnn_model
 
 
-
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -43,32 +42,41 @@ def make_loader(cfg, split, batch_size, workers, seed):
 
 
 def load_ae_decoder(cfg, device):
-    """
-    기존 build_robot_gnn_model 구조가 decoder 인자를 요구할 수 있으므로
-    AE decoder만 로드한다. 이 스크립트의 loss는 decoder 출력이 아니라
-    GNN final_h와 target_latent 사이에서 계산된다.
-    """
     ae_ckpt_path = cfg["ae"]["checkpoint"]
     ckpt = torch.load(ae_ckpt_path, map_location=device)
     ae_cfg = ckpt["cfg"]
 
     ae = PointNet2AutoEncoder(
         encoder_mode=ae_cfg["model"].get("encoder_mode", "ssg"),
-        decoder_mode=ae_cfg["model"].get("decoder_mode", "mlp"),
+        decoder_mode=ae_cfg["model"].get("decoder_mode", "folding"),
+
         latent_dim=ae_cfg["model"]["latent_dim"],
         input_channels=ae_cfg["model"].get("input_channels", 0),
+
         target_num_points=ae_cfg["data"]["target_num_points"],
         output_dim=ae_cfg["model"].get("output_dim", 3),
+
         base_radius=ae_cfg["model"].get("base_radius", 1.0),
         npoint1=ae_cfg["model"].get("npoint1", 32),
         npoint2=ae_cfg["model"].get("npoint2", 16),
+
         hidden_dim=ae_cfg["model"].get("hidden_dim", 128),
         k_cov=ae_cfg["model"].get("k_cov", 32),
         k_agg=ae_cfg["model"].get("k_agg", 16),
         use_attention=ae_cfg["model"].get("use_attention", True),
-        decoder_hidden_dim=ae_cfg["model"].get("decoder_hidden_dim", 512),
-        folding_grid_dim=ae_cfg["model"].get("folding_grid_dim", 1),
-        folding_num_folds=ae_cfg["model"].get("folding_num_folds", 2),
+
+        decoder_hidden_dim=ae_cfg["model"].get(
+            "decoder_hidden_dim",
+            512,
+        ),
+        folding_grid_dim=ae_cfg["model"].get(
+            "folding_grid_dim",
+            1,
+        ),
+        folding_num_folds=ae_cfg["model"].get(
+            "folding_num_folds",
+            2,
+        ),
     ).to(device)
 
     ae.load_state_dict(ckpt["model"])
@@ -80,6 +88,12 @@ def load_ae_decoder(cfg, device):
         for p in decoder.parameters():
             p.requires_grad = False
         decoder.eval()
+
+    print(
+        f"Loaded AE: "
+        f"decoder={ae_cfg['model'].get('decoder_mode', 'folding')}, "
+        f"checkpoint={ae_ckpt_path}"
+    )
 
     return decoder, ae_cfg
 

@@ -56,8 +56,14 @@ def main(config_path):
     val_loader = make_loader(cfg["data"], "val", cfg["training"]["batch_size"], cfg["training"]["num_workers"], seed + 1234)
     model = PointNet2AutoEncoder(
         encoder_mode=cfg["model"]["encoder_mode"],
+        decoder_mode=cfg["model"].get("decoder_mode", "folding"),
+
         latent_dim=cfg["model"]["latent_dim"],
+        input_channels=cfg["model"].get("input_channels", 0),
+
         target_num_points=cfg["data"]["target_num_points"],
+        output_dim=cfg["model"].get("output_dim", 3),
+
         base_radius=cfg["model"].get("base_radius", 1.0),
         npoint1=cfg["model"].get("npoint1", 32),
         npoint2=cfg["model"].get("npoint2", 16),

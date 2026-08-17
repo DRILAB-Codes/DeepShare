@@ -6,6 +6,7 @@ from .decoder import PointCloudDecoder
 from .folding_decoder import FoldingDecoder
 from .transformer_decoder import TransformerDecoder
 from .diffusion_decoder import DiffusionDecoder
+from .snowflake_decoder import SnowflakeDecoder
 
 
 class PointNet2AutoEncoder(nn.Module):
@@ -83,6 +84,13 @@ class PointNet2AutoEncoder(nn.Module):
 
         elif decoder_mode == "diffusion":
             self.decoder = DiffusionDecoder(
+            latent_dim=latent_dim,
+            num_points=target_num_points,
+            out_dim=output_dim,
+        )
+
+        elif decoder_mode == "snow":
+            self.decoder = SnowflakeDecoder(
             latent_dim=latent_dim,
             num_points=target_num_points,
             out_dim=output_dim,

@@ -126,7 +126,7 @@ class SimpleGraphAttention(nn.Module):
             edge_index = add_self_loops(edge_index, num_nodes)
 
         src, dst = edge_index[0], edge_index[1]
-        h = self.lin(x)     # W*h
+        h = self.lin(x)
 
         e_src = (h[src] * self.attn_src).sum(dim=-1)
         e_dst = (h[dst] * self.attn_dst).sum(dim=-1)

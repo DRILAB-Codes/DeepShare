@@ -1,4 +1,4 @@
-# export SLACK_WEBHOOK_URL="https://hooks.slack.com/"
+# export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T0940M7L40J/B0B4W69fPibHLi1YN0G1nx6aDYk8xUW2QAZ/"
 
 import requests
 import os

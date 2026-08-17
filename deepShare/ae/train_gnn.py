@@ -44,27 +44,181 @@ def make_loader(cfg, split, batch_size, workers, seed):
 
 def load_ae_decoder(cfg, device):
     ae_ckpt_path = cfg["ae"]["checkpoint"]
-    ckpt = torch.load(ae_ckpt_path, map_location=device)
+
+    ckpt = torch.load(
+        ae_ckpt_path,
+        map_location=device,
+    )
+
     ae_cfg = ckpt["cfg"]
 
+    model_cfg = ae_cfg["model"]
+    data_cfg = ae_cfg["data"]
+
+    # -------------------------------------------------
+    # decoder mode 결정
+    # -------------------------------------------------
+
+    decoder_mode = model_cfg.get(
+        "decoder_mode",
+        None,
+    )
+
+    # 옛 checkpoint에 decoder_mode가 없을 경우
+    # state_dict 구조로 판별
+    if decoder_mode is None:
+        keys = ckpt["model"].keys()
+
+        if any(
+            k.startswith("decoder.seed_generator.")
+            for k in keys
+        ):
+            decoder_mode = "snow"
+
+        elif any(
+            k.startswith("decoder.fold1.")
+            for k in keys
+        ):
+            decoder_mode = "folding"
+
+        else:
+            raise RuntimeError(
+                "Cannot determine decoder mode "
+                f"from checkpoint: {ae_ckpt_path}"
+            )
+
+    print(
+        f"[AE] checkpoint   : {ae_ckpt_path}"
+    )
+    print(
+        f"[AE] decoder_mode : {decoder_mode}"
+    )
+    print(
+        f"[AE] input_channels: "
+        f"{model_cfg.get('input_channels', 0)}"
+    )
+
+    # -------------------------------------------------
+    # checkpoint 설정과 동일한 AE 구조 생성
+    # -------------------------------------------------
+
     ae = PointNet2AutoEncoder(
-        encoder_mode=ae_cfg["model"]["encoder_mode"],
-        latent_dim=ae_cfg["model"]["latent_dim"],
-        target_num_points=ae_cfg["data"]["target_num_points"],
-        base_radius=ae_cfg["model"].get("base_radius", 1.0),
-        npoint1=ae_cfg["model"].get("npoint1", 32),
-        npoint2=ae_cfg["model"].get("npoint2", 16),
+        encoder_mode=model_cfg.get(
+            "encoder_mode",
+            "ssg",
+        ),
+
+        decoder_mode=decoder_mode,
+
+        latent_dim=model_cfg[
+            "latent_dim"
+        ],
+
+        input_channels=model_cfg.get(
+            "input_channels",
+            0,
+        ),
+
+        target_num_points=data_cfg[
+            "target_num_points"
+        ],
+
+        output_dim=model_cfg.get(
+            "output_dim",
+            3,
+        ),
+
+        base_radius=model_cfg.get(
+            "base_radius",
+            1.0,
+        ),
+
+        npoint1=model_cfg.get(
+            "npoint1",
+            32,
+        ),
+
+        npoint2=model_cfg.get(
+            "npoint2",
+            16,
+        ),
+
+        hidden_dim=model_cfg.get(
+            "hidden_dim",
+            128,
+        ),
+
+        k_cov=model_cfg.get(
+            "k_cov",
+            32,
+        ),
+
+        k_agg=model_cfg.get(
+            "k_agg",
+            16,
+        ),
+
+        use_attention=model_cfg.get(
+            "use_attention",
+            True,
+        ),
+
+        decoder_hidden_dim=model_cfg.get(
+            "decoder_hidden_dim",
+            512,
+        ),
+
+        folding_grid_dim=model_cfg.get(
+            "folding_grid_dim",
+            1,
+        ),
+
+        folding_num_folds=model_cfg.get(
+            "folding_num_folds",
+            2,
+        ),
     ).to(device)
 
-    ae.load_state_dict(ckpt["model"])
-    ae.eval()
+    # -------------------------------------------------
+    # AE 전체가 아니라 decoder weight만 꺼냄
+    # -------------------------------------------------
+
+    decoder_state = {
+        key[len("decoder."):]: value
+        for key, value in ckpt["model"].items()
+        if key.startswith("decoder.")
+    }
+
+    if not decoder_state:
+        raise RuntimeError(
+            "No decoder weights found in "
+            f"{ae_ckpt_path}"
+        )
+
+    ae.decoder.load_state_dict(
+        decoder_state,
+        strict=True,
+    )
 
     decoder = ae.decoder
 
-    if cfg["ae"].get("freeze_decoder", True):
+    # -------------------------------------------------
+    # decoder 고정
+    # -------------------------------------------------
+
+    if cfg["ae"].get(
+        "freeze_decoder",
+        True,
+    ):
         for p in decoder.parameters():
             p.requires_grad = False
+
         decoder.eval()
+
+    print(
+        f"[AE] decoder class : "
+        f"{decoder.__class__.__name__}"
+    )
 
     return decoder, ae_cfg
 

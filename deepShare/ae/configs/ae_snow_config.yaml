@@ -1,0 +1,28 @@
+data:
+  train_dir: data/ae/train_mixed
+  val_dir: data/ae/val_mixed
+  test_dir: data/ae/test_mixed
+  input_num_points: 64
+  target_num_points: 128
+  include_miss: false
+  normalize: true
+
+model:
+  encoder_mode: msg      # ssg or msg
+  decoder_mode: snow
+  latent_dim: 128
+  input_channels: 1
+  base_radius: 1.0
+  npoint1: 32
+  npoint2: 16
+
+training:
+  out_dir: out/ae_msg_snow_mixed
+  batch_size: 128
+  epochs: 700
+  lr: 0.001
+  patience: 50
+  min_delta: 0.00001
+  num_workers: 4
+  save_every: 10
+  seed: 0

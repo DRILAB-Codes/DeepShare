@@ -122,69 +122,6 @@ def rankdata_simple(x):
     ranks[order] = np.arange(len(x), dtype=np.float64)
     return ranks
 
-def analyze_distance_scaling(rows):
-    ae = np.asarray(
-        [r["ae_distance"] for r in rows],
-        dtype=np.float64,
-    )
-    gnn = np.asarray(
-        [r["gnn_distance"] for r in rows],
-        dtype=np.float64,
-    )
-
-    # 원점을 지나는 최적 균일 스케일
-    alpha = float(
-        np.dot(ae, gnn) / np.dot(ae, ae)
-    )
-
-    # 절편까지 허용한 일반 선형회귀
-    slope, intercept = np.polyfit(ae, gnn, deg=1)
-    pred_linear = slope * ae + intercept
-
-    ss_res = np.sum((gnn - pred_linear) ** 2)
-    ss_tot = np.sum((gnn - gnn.mean()) ** 2)
-    r_squared = float(
-        1.0 - ss_res / ss_tot
-        if ss_tot > 1e-12
-        else float("nan")
-    )
-
-    raw_rmse = float(
-        np.sqrt(np.mean((gnn - ae) ** 2))
-    )
-
-    scaled_rmse = float(
-        np.sqrt(np.mean((gnn - alpha * ae) ** 2))
-    )
-
-    mean_ae = float(ae.mean())
-
-    raw_nrmse = (
-        raw_rmse / mean_ae
-        if mean_ae > 1e-12
-        else float("nan")
-    )
-    scaled_nrmse = (
-        scaled_rmse / mean_ae
-        if mean_ae > 1e-12
-        else float("nan")
-    )
-
-    ratios = gnn / np.maximum(ae, 1e-12)
-
-    return {
-        "optimal_scale_alpha": alpha,
-        "linear_slope": float(slope),
-        "linear_intercept": float(intercept),
-        "linear_r_squared": r_squared,
-        "raw_rmse": raw_rmse,
-        "scale_corrected_rmse": scaled_rmse,
-        "raw_nrmse": raw_nrmse,
-        "scale_corrected_nrmse": scaled_nrmse,
-        "median_distance_ratio": float(np.median(ratios)),
-        "ratio_q25": float(np.percentile(ratios, 25)),
-        "ratio_q75": float(np.percentile(ratios, 75)),
-    }
 
 def make_scatter(rows, out_path, annotate_top_k):
     ae = np.asarray([r["ae_distance"] for r in rows])
@@ -386,8 +323,6 @@ def main():
     make_dimension_plots(ae_stats, gnn_stats, out_dir)
     save_csv(rows, out_dir / "pairwise_shape_distances.csv")
 
-    scale_summary = analyze_distance_scaling(rows)
-
     summary = {
         "data_dir": str(data_dir),
         "num_json_files": len(files),
@@ -398,12 +333,10 @@ def main():
         "gnn_distribution": jsonable(gnn_stats),
         "pairwise_distance_summary": scatter_summary,
         "shape_files": {shape: shape_data[shape]["files"] for shape in shape_data},
-        "distance_scaling_summary": scale_summary,
     }
 
     with open(out_dir / "summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2, ensure_ascii=False)
-
 
     print("=" * 80)
     print("Selected latent distribution")
@@ -423,11 +356,6 @@ def main():
         f"{gnn_stats['global_std']:.6f} / "
         f"{gnn_stats['global_var']:.6f}"
     )
-        
-    print("\nDistance scaling analysis")
-    for key, value in scale_summary.items():
-        print(f"{key:28s}: {value}")
-        
     print()
     for k, v in scatter_summary.items():
         print(f"{k:28s}: {v}")
