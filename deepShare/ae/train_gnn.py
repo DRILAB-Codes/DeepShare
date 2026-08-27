@@ -76,7 +76,7 @@ def load_ae_decoder(cfg, device):
             decoder_mode = "snow"
 
         elif any(
-            k.startswith("decoder.fold1.")
+            k.startswith("decoder.net.")
             for k in keys
         ):
             decoder_mode = "folding"
@@ -222,6 +222,131 @@ def load_ae_decoder(cfg, device):
 
     return decoder, ae_cfg
 
+def build_random_decoder(cfg, device):
+    """
+    AE checkpoint를 사용하지 않고,
+    AE config에 정의된 decoder 구조만 이용해서
+    random initialization decoder를 생성한다.
+
+    encoder weight / AE checkpoint는 전혀 사용하지 않는다.
+    """
+
+    ae_config_path = cfg["ae"]["architecture_config"]
+
+    with open(ae_config_path, "r", encoding="utf-8") as f:
+        ae_cfg = yaml.safe_load(f)
+
+    model_cfg = ae_cfg["model"]
+    data_cfg = ae_cfg["data"]
+
+    decoder_mode = model_cfg.get("decoder_mode", "folding")
+
+    if decoder_mode != "folding":
+        raise ValueError(
+            f"End-to-end experiment expects folding decoder, "
+            f"but decoder_mode={decoder_mode}"
+        )
+
+    # 동일한 decoder 구조를 만들기 위해
+    # AE wrapper를 생성한 뒤 decoder만 사용한다.
+    ae = PointNet2AutoEncoder(
+        encoder_mode=model_cfg.get(
+            "encoder_mode",
+            "ssg",
+        ),
+
+        decoder_mode=decoder_mode,
+
+        latent_dim=model_cfg[
+            "latent_dim"
+        ],
+
+        input_channels=model_cfg.get(
+            "input_channels",
+            0,
+        ),
+
+        target_num_points=data_cfg[
+            "target_num_points"
+        ],
+
+        output_dim=model_cfg.get(
+            "output_dim",
+            3,
+        ),
+
+        base_radius=model_cfg.get(
+            "base_radius",
+            1.0,
+        ),
+
+        npoint1=model_cfg.get(
+            "npoint1",
+            32,
+        ),
+
+        npoint2=model_cfg.get(
+            "npoint2",
+            16,
+        ),
+
+        hidden_dim=model_cfg.get(
+            "hidden_dim",
+            128,
+        ),
+
+        k_cov=model_cfg.get(
+            "k_cov",
+            32,
+        ),
+
+        k_agg=model_cfg.get(
+            "k_agg",
+            16,
+        ),
+
+        use_attention=model_cfg.get(
+            "use_attention",
+            True,
+        ),
+
+        decoder_hidden_dim=model_cfg.get(
+            "decoder_hidden_dim",
+            512,
+        ),
+
+        folding_grid_dim=model_cfg.get(
+            "folding_grid_dim",
+            1,
+        ),
+
+        folding_num_folds=model_cfg.get(
+            "folding_num_folds",
+            2,
+        ),
+    ).to(device)
+
+    decoder = ae.decoder
+
+    # end-to-end이므로 decoder 학습 허용
+    for p in decoder.parameters():
+        p.requires_grad = True
+
+    print(
+        f"[Decoder] mode        : end_to_end"
+    )
+    print(
+        f"[Decoder] class       : "
+        f"{decoder.__class__.__name__}"
+    )
+    print(
+        f"[Decoder] init        : random"
+    )
+    print(
+        f"[Decoder] trainable   : True"
+    )
+
+    return decoder, ae_cfg
 
 def squeeze_batch(b, device):
     """
@@ -459,7 +584,31 @@ def main(config_path):
         seed=seed + 1234,
     )
 
-    decoder, ae_cfg = load_ae_decoder(cfg, device)
+    decoder_training_mode = cfg["ae"].get(
+        "mode",
+        "pretrained",
+    )
+
+    if decoder_training_mode == "pretrained":
+
+        decoder, ae_cfg = load_ae_decoder(
+            cfg,
+            device,
+        )
+
+    elif decoder_training_mode == "end_to_end":
+
+        decoder, ae_cfg = build_random_decoder(
+            cfg,
+            device,
+        )
+
+    else:
+
+        raise ValueError(
+            f"Unknown ae.mode: "
+            f"{decoder_training_mode}"
+        )
 
     # GNN latent_dim과 AE latent_dim 일치 확인
     ae_latent_dim = int(ae_cfg["model"]["latent_dim"])
@@ -483,7 +632,7 @@ def main(config_path):
 
     best = float("inf")
     hist = []
-    patience = int(cfg["training"].get("patience", 50))
+    patience = int(cfg["training"].get("patience", 20))
     min_delta = float(cfg["training"].get("min_delta", 1e-5))
     bad_epochs = 0
 

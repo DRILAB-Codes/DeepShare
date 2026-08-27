@@ -1,3 +1,8 @@
+# =========================
+# 초기 데이터셋 생성 코드
+# 기본 도형 + 랜덤 생성 도형에 대해 주변에 장애물 배치하고 라이다 관측 결과와 통신 이웃 저장 (시뮬레이터)
+# 추가로 AE용 장애물 외곽 점 256개
+# =========================
 import os
 import sys
 import random
@@ -78,7 +83,7 @@ def generate_sample(i, save_dir):
     # 장애물 크기 다양화
     obstacle_scale = random.uniform(0.6, 1.8)
 
-    # 로봇 배치도 약간 다양화
+    # 로봇 수, 센서 범위, 통신 범위, 라이다 수 다양화
     n_robots = random.randint(6, 16)
     sensor_range = random.uniform(3.0, 6.0)
     num_rays = random.choice([32, 64, 128])
@@ -159,6 +164,7 @@ def main():
 
     print("Generating TEST dataset...")
     idx = 0
+    # 각 형태에 대해 고정된 스케일, 로봇 수로 생성
     for shape_type in SHAPES:
         for scale in TEST_SCALES:
             generate_fixed_sample(idx, TEST_DIR, shape_type, scale)

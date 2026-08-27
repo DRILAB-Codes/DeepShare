@@ -1,4 +1,29 @@
+# =============================================================================
 # add_ae_latent_to_dataset.py
+#
+# 목적:
+#   기존 장애물/로봇/관측 JSON 데이터셋에
+#   전체 장애물 boundary를 AE encoder로 인코딩한 target latent를 추가한다.
+#
+# 처리 흐름:
+#   data/ae/*_mixed
+#       -> obstacle["boundary_points"]를 AE에 입력
+#       -> obstacle["ae_latent"] 생성
+#       -> data/gnn_latent/*_mixed 에 저장
+#
+# 생성되는 주요 필드:
+#   obstacle["ae_latent"]      : 전체 장애물 boundary의 AE latent vector
+#   obstacle["ae_latent_dim"]  : latent dimension
+#
+# 용도:
+#   이후 GNN이 각 로봇의 부분 관측과 통신을 통해 추론해야 할
+#   전체 장애물의 target latent (ground-truth latent)를 미리 생성하기 위함.
+#
+# 주의:
+#   이 코드는 새로운 장애물/로봇 데이터를 생성하지 않는다.
+#   기존 JSON 파일의 구조를 유지하면서 AE latent 정보만 추가하여
+#   별도의 출력 디렉터리에 저장하는 dataset enrichment/post-processing 코드이다.
+# =============================================================================
 
 import argparse
 import json

@@ -1,3 +1,13 @@
+#=====================================================================================
+# 오토 인코더 시각화 코드
+# python visualize_recon.py \
+#   --checkpoint out/**/model_best.pt \
+#   --data_dir data/*/test \
+#   --dataset_mode ae \
+#   --per_shape 카테고리 당 수행 횟수 \
+#   --save_dir out/**/vis_*
+#========================================================================================
+
 import argparse
 from collections import defaultdict
 from pathlib import Path

@@ -6,21 +6,22 @@ data:
   target_num_points: 128
   include_miss: false
   normalize: true
-
 model:
-  encoder_mode: msg   # ssg or msg
+  encoder_mode: msg
   latent_dim: 128
   base_radius: 1.0
   npoint1: 32
   npoint2: 16
-
+  decoder_mode: folding
+  input_channels: 1
+  output_dim: 3
 training:
-  out_dir: out/ae_msg
+  out_dir: out/folding_pretrained_vs_e2e/ae_pretrain
   batch_size: 128
-  epochs: 700
+  epochs: 200
   lr: 0.001
   patience: 20
-  min_delta: 0.00001
+  min_delta: 1.0e-05
   num_workers: 4
   save_every: 10
-  seed: 0
+  seed: 42

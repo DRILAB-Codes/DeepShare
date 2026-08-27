@@ -1,4 +1,40 @@
+# =============================================================================
 # add_gnn_latent_to_dataset.py
+#
+# 목적:
+#   AE target latent가 이미 추가된 데이터셋에 학습된 GNN을 적용하여
+#   각 로봇이 추론한 GNN latent와 consensus/latent 비교 분석 결과를 추가한다.
+#
+# 처리 흐름:
+#   data/gnn_latent/*_mixed
+#       -> LidarObstacleAEDataset으로 robot observation / graph 구성
+#       -> 학습된 GNN inference
+#       -> 각 robot의 final latent 계산
+#       -> AE target latent와 GNN latent 비교 및 consensus 통계 계산
+#       -> data/gnn_latent_with_gnn/*_mixed 에 저장
+#
+# 생성되는 주요 필드:
+#   robots[i]["gnn_latent"]          : 각 로봇의 최종 GNN latent
+#   robots[i]["gnn_latent_dim"]      : latent dimension
+#
+#   obstacle["gnn_analysis"]:
+#       - gnn_latent_nodes           : 모든 로봇의 GNN latent
+#       - gnn_latent_mean            : 로봇 latent 평균
+#       - consensus 관련 통계
+#       - AE target latent와의 MSE / cosine similarity
+#       - GNN convergence / step 정보
+#
+# 용도:
+#   학습된 GNN이 각 로봇의 부분 관측을 이용하여
+#   전체 장애물의 AE target latent를 얼마나 잘 추론하는지 분석하고,
+#   로봇 간 latent consensus가 얼마나 형성되었는지 평가하기 위함.
+#
+# 주의:
+#   이 코드는 GNN 학습용 target latent를 생성하는 코드가 아니다.
+#   target AE latent는 입력 데이터셋에 이미 존재한다고 가정한다.
+#   또한 새로운 원본 데이터를 생성하지 않고 기존 JSON에
+#   GNN inference/analysis 결과를 추가하는 post-processing 코드이다.
+# =============================================================================
 
 import argparse
 import json

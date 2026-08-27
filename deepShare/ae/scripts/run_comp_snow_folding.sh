@@ -78,7 +78,7 @@ Output: ${BASE_OUT}"
 # Folding / Snow 각각 GNN 학습
 # ============================================================
 
-for DECODER in snow folding
+for DECODER in snow folding 
 do
 
     # --------------------------------------------------------
@@ -86,7 +86,7 @@ do
     # --------------------------------------------------------
 
     if [ "${DECODER}" = "folding" ]; then
-        AE_CHECKPOINT="out/ae_ssg/model_best.pt"
+        AE_CHECKPOINT="out/ae_msg/model_best.pt"
 
     elif [ "${DECODER}" = "snow" ]; then
         AE_CHECKPOINT="out/ae_msg_snow/model_best.pt"

@@ -1,3 +1,13 @@
+#=========================================================================
+# GNN 시각화 코드
+# python visualize_robot_gnn.py \
+#   --checkpoint 학습한 모델 \
+#   --data_dir 데이터셋 \
+#   --per_shape 각 카테고리별 검증 횟수 \
+#   --max_robots 옆에 로봇 기준 시각화할 횟수 \
+#   --save_dir 출력 위치
+#==================================================================================
+
 import argparse
 from collections import defaultdict
 from pathlib import Path
@@ -8,6 +18,9 @@ import torch
 from datasets.lidar_pointcloud_dataset import LidarObstacleAEDataset
 from models.autoencoder import PointNet2AutoEncoder
 from models.robot_gnn import build_robot_gnn_model
+
+import numpy as np
+from losses.chamfer import chamfer_distance
 
 
 def load_ae_decoder(cfg, device):
@@ -100,7 +113,97 @@ def load_ae_decoder(cfg, device):
     )
 
     return decoder
+    
+def build_random_decoder_from_config(cfg, device):
+    """
+    E2E visualization용.
+    AE checkpoint weight는 사용하지 않고
+    architecture_config를 이용해 동일한 decoder 구조만 생성한다.
 
+    실제 학습된 decoder weight는 이후
+    GNN checkpoint의 model state_dict에서 로드된다.
+    """
+
+    ae_config_path = cfg["ae"]["architecture_config"]
+
+    import yaml
+
+    with open(ae_config_path, "r", encoding="utf-8") as f:
+        ae_cfg = yaml.safe_load(f)
+
+    model_cfg = ae_cfg["model"]
+    data_cfg = ae_cfg["data"]
+
+    ae = PointNet2AutoEncoder(
+        encoder_mode=model_cfg.get(
+            "encoder_mode",
+            "ssg",
+        ),
+        decoder_mode=model_cfg.get(
+            "decoder_mode",
+            "folding",
+        ),
+        latent_dim=model_cfg["latent_dim"],
+        input_channels=model_cfg.get(
+            "input_channels",
+            0,
+        ),
+        target_num_points=data_cfg["target_num_points"],
+        output_dim=model_cfg.get(
+            "output_dim",
+            3,
+        ),
+        base_radius=model_cfg.get(
+            "base_radius",
+            1.0,
+        ),
+        npoint1=model_cfg.get(
+            "npoint1",
+            32,
+        ),
+        npoint2=model_cfg.get(
+            "npoint2",
+            16,
+        ),
+        hidden_dim=model_cfg.get(
+            "hidden_dim",
+            128,
+        ),
+        k_cov=model_cfg.get(
+            "k_cov",
+            32,
+        ),
+        k_agg=model_cfg.get(
+            "k_agg",
+            16,
+        ),
+        use_attention=model_cfg.get(
+            "use_attention",
+            True,
+        ),
+        decoder_hidden_dim=model_cfg.get(
+            "decoder_hidden_dim",
+            512,
+        ),
+        folding_grid_dim=model_cfg.get(
+            "folding_grid_dim",
+            1,
+        ),
+        folding_num_folds=model_cfg.get(
+            "folding_num_folds",
+            2,
+        ),
+    ).to(device)
+
+    decoder = ae.decoder
+
+    print("[Decoder] mode  : end_to_end")
+    print(
+        f"[Decoder] class : "
+        f"{decoder.__class__.__name__}"
+    )
+
+    return decoder
 
 def build_dataset(cfg, data_dir, seed=0):
     data_cfg = cfg["data"]
@@ -117,14 +220,89 @@ def build_dataset(cfg, data_dir, seed=0):
 
 
 def load_robot_gnn(checkpoint_path, device):
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(
+        checkpoint_path,
+        map_location=device,
+    )
+
     cfg = ckpt["cfg"]
 
-    decoder = load_ae_decoder(cfg, device)
-    model = build_robot_gnn_model(cfg, decoder=decoder).to(device)
+    ae_mode = cfg.get(
+        "ae",
+        {},
+    ).get(
+        "mode",
+        "pretrained",
+    )
 
-    model.load_state_dict(ckpt["model"])
+    # ========================================================
+    # Frozen pretrained decoder
+    # ========================================================
+
+    if ae_mode == "pretrained":
+
+        print(
+            "[GNN] decoder mode : "
+            "pretrained"
+        )
+
+        decoder = load_ae_decoder(
+            cfg,
+            device,
+        )
+
+    # ========================================================
+    # End-to-End decoder
+    # ========================================================
+
+    elif ae_mode == "end_to_end":
+
+        print(
+            "[GNN] decoder mode : "
+            "end_to_end"
+        )
+
+        decoder = build_random_decoder_from_config(
+            cfg,
+            device,
+        )
+
+    else:
+
+        raise ValueError(
+            f"Unknown ae.mode: {ae_mode}"
+        )
+
+
+    model = build_robot_gnn_model(
+        cfg,
+        decoder=decoder,
+    ).to(device)
+
+
+    # --------------------------------------------------------
+    # 중요:
+    #
+    # Frozen:
+    #   GNN weight + frozen decoder weight가 checkpoint에 저장됨
+    #
+    # E2E:
+    #   GNN weight + 학습된 decoder weight가 checkpoint에 저장됨
+    #
+    # 따라서 둘 다 여기서 전체 state_dict를 로드하면 됨.
+    # --------------------------------------------------------
+
+    model.load_state_dict(
+        ckpt["model"],
+        strict=True,
+    )
+
     model.eval()
+
+    print(
+        f"[GNN] checkpoint : "
+        f"{checkpoint_path}"
+    )
 
     return model, cfg
 
@@ -173,11 +351,153 @@ def collect_indices_by_shape(ds, per_shape=4, start_index=0):
 
     return selected_indices, shape_to_indices
 
+@torch.no_grad()
+def compute_sample_metrics(pred_nodes, final_h, target, info):
+    """
+    pred_nodes : [N, Q, 3]
+    final_h    : [N, D]
+    target     : [Q, 3]
+
+    train_gnn.py의 validation metric과 동일한 방식으로
+    한 sample의 quantitative metric을 계산.
+    """
+
+    # --------------------------------------------------------
+    # Node-wise Chamfer Distance
+    # --------------------------------------------------------
+
+    node_cd = []
+
+    for i in range(pred_nodes.size(0)):
+        cd = chamfer_distance(
+            pred_nodes[i:i + 1],
+            target.unsqueeze(0),
+        )
+        node_cd.append(float(cd.item()))
+
+    node_cd = np.asarray(
+        node_cd,
+        dtype=np.float64,
+    )
+
+
+    # --------------------------------------------------------
+    # Consensus statistics
+    # --------------------------------------------------------
+
+    mean_h = final_h.mean(
+        dim=0,
+        keepdim=True,
+    )
+
+    dist = torch.norm(
+        final_h - mean_h,
+        dim=1,
+    )
+
+    dist_np = (
+        dist
+        .detach()
+        .cpu()
+        .numpy()
+        .astype(np.float64)
+    )
+
+
+    return {
+        # train_gnn.py의 val_loss와 사실상 같은 의미
+        "loss": float(node_cd.mean()),
+
+        "node_chamfer_mean": float(node_cd.mean()),
+        "node_chamfer_max": float(node_cd.max()),
+        "node_chamfer_min": float(node_cd.min()),
+        "node_chamfer_std": float(node_cd.std()),
+
+        "consensus_gap": float(dist_np.max()),
+        "consensus_mean": float(dist_np.mean()),
+        "consensus_std": float(dist_np.std()),
+
+        "steps": float(info.get("used_steps", 0)),
+        "converged": float(bool(info.get("converged", False))),
+    }
+
+@torch.no_grad()
+def evaluate_full_dataset(model, ds, device):
+    """
+    전체 test dataset에 대해 quantitative metric 계산.
+
+    train_gnn.py validation evaluate와 동일하게
+    sample별 metric을 계산한 뒤 sample 평균을 사용한다.
+    """
+
+    all_metrics = []
+
+    print()
+    print("======================================")
+    print("Evaluating full dataset...")
+    print(f"Samples: {len(ds)}")
+    print("======================================")
+
+    for i in range(len(ds)):
+        sample = ds[i]
+
+        x = sample["x"].to(device)
+        edge_index = sample["edge_index"].to(device)
+        target = sample["target"].to(device)
+
+        pred_nodes, final_h, info = model(
+            x,
+            edge_index,
+        )
+
+        metrics = compute_sample_metrics(
+            pred_nodes,
+            final_h,
+            target,
+            info,
+        )
+
+        all_metrics.append(metrics)
+
+        if (i + 1) % 100 == 0 or (i + 1) == len(ds):
+            print(
+                f"[Test] {i + 1}/{len(ds)}"
+            )
+
+
+    keys = [
+        "loss",
+        "node_chamfer_mean",
+        "node_chamfer_max",
+        "node_chamfer_min",
+        "node_chamfer_std",
+        "consensus_gap",
+        "consensus_mean",
+        "consensus_std",
+        "steps",
+        "converged",
+    ]
+
+
+    avg = {}
+
+    for key in keys:
+        avg[key] = float(
+            np.mean([
+                m[key]
+                for m in all_metrics
+            ])
+        )
+
+
+    return avg
+
 
 def plot_one_sample(
     sample,
     pred_nodes,
     info,
+    metrics,
     save_path,
     sample_idx,
     max_robots=None,
@@ -304,9 +624,23 @@ def plot_one_sample(
             ax.legend(loc="best", fontsize=8)
 
     fig.suptitle(
-        f"Sample {sample_idx} | shape={shape_type} | scale={obstacle_scale} | "
-        f"steps={info.get('used_steps')} | converged={info.get('converged')}",
-        fontsize=13,
+        (
+            f"Sample {sample_idx} | "
+            f"shape={shape_type} | "
+            f"scale={obstacle_scale}\n"
+
+            f"CD mean={metrics['node_chamfer_mean']:.6f} | "
+            f"max={metrics['node_chamfer_max']:.6f} | "
+            f"min={metrics['node_chamfer_min']:.6f} | "
+            f"std={metrics['node_chamfer_std']:.6f}\n"
+
+            f"Consensus gap={metrics['consensus_gap']:.6f} | "
+            f"mean={metrics['consensus_mean']:.6f} | "
+            f"std={metrics['consensus_std']:.6f} | "
+            f"steps={metrics['steps']:.0f} | "
+            f"converged={bool(metrics['converged'])}"
+        ),
+        fontsize=12,
     )
 
     save_path = Path(save_path)
@@ -335,6 +669,75 @@ def main():
     model, cfg = load_robot_gnn(args.checkpoint, device)
     ds = build_dataset(cfg, args.data_dir, seed=args.seed)
 
+    test_metrics = evaluate_full_dataset(
+        model,
+        ds,
+        device,
+    )
+
+
+    print()
+    print("============================================================")
+    print("TEST SET QUANTITATIVE RESULTS")
+    print("============================================================")
+
+    print(
+        f"Samples                 : {len(ds)}"
+    )
+
+    print(
+        f"Test loss               : "
+        f"{test_metrics['loss']:.6f}"
+    )
+
+    print(
+        f"Node Chamfer mean       : "
+        f"{test_metrics['node_chamfer_mean']:.6f}"
+    )
+
+    print(
+        f"Node Chamfer max        : "
+        f"{test_metrics['node_chamfer_max']:.6f}"
+    )
+
+    print(
+        f"Node Chamfer min        : "
+        f"{test_metrics['node_chamfer_min']:.6f}"
+    )
+
+    print(
+        f"Node Chamfer std        : "
+        f"{test_metrics['node_chamfer_std']:.6f}"
+    )
+
+    print(
+        f"Consensus gap           : "
+        f"{test_metrics['consensus_gap']:.6f}"
+    )
+
+    print(
+        f"Consensus mean          : "
+        f"{test_metrics['consensus_mean']:.6f}"
+    )
+
+    print(
+        f"Consensus std           : "
+        f"{test_metrics['consensus_std']:.6f}"
+    )
+
+    print(
+        f"Average steps           : "
+        f"{test_metrics['steps']:.2f}"
+    )
+
+    print(
+        f"Convergence rate        : "
+        f"{test_metrics['converged']:.2%}"
+    )
+
+    print("============================================================")
+    print()
+
     save_dir = Path(args.save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -357,6 +760,13 @@ def main():
         with torch.no_grad():
             pred_nodes, final_h, info = model(x, edge_index)
 
+        metrics = compute_sample_metrics(
+            pred_nodes,
+            final_h,
+            sample["target"].to(device),
+            info,
+        )
+
         shape_type = get_shape_type(sample)
         shape_dir = save_dir / str(shape_type)
         shape_dir.mkdir(parents=True, exist_ok=True)
@@ -367,6 +777,7 @@ def main():
             sample=sample,
             pred_nodes=pred_nodes,
             info=info,
+            metrics=metrics,
             save_path=save_path,
             sample_idx=i,
             max_robots=args.max_robots,

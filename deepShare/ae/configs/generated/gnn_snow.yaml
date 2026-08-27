@@ -5,7 +5,7 @@ data:
   target_num_points: 128
   include_miss: false
   normalize: true
-  use_world_frame: true
+  use_world_frame: false
 ae:
   checkpoint: out/ae_msg_snow/model_best.pt
   freeze_decoder: true
