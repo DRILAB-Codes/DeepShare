@@ -1,0 +1,33 @@
+data:
+  train_dir: data/ae/train
+  val_dir: data/ae/val
+  input_num_points: 64
+  target_num_points: 128
+  include_miss: false
+  normalize: true
+  use_world_frame: false
+  test_dir: data/ae/test
+ae:
+  checkpoint: out/folding_pretrained_vs_e2e/ae_pretrain/model_best.pt
+  freeze_decoder: false
+  mode: pretrained
+model:
+  method: consensus
+  input_point_dim: 3
+  latent_dim: 128
+  node_hidden_dim: 128
+  aggregator: dual_attention
+  include_self: true
+  max_steps: 15
+  stable_tol: 0.03
+  stable_patience: 3
+  stop_when_converged: true
+training:
+  out_dir: out/folding_pretrained_vs_e2e/gnn_finetune
+  batch_size: 1
+  epochs: 200
+  lr: 0.0001
+  weight_decay: 1.0e-05
+  num_workers: 0
+  seed: 42
+  save_every: 50

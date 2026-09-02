@@ -69,7 +69,6 @@ MAX_PLACEMENT_RETRIES = 3
 MAX_SETTING_RETRIES = 5
 
 
-
 def sample_polygon_boundary(polygon, num_points=256):
     """
     polygon: [[x, y], [x, y], ...]
